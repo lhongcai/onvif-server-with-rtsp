@@ -1,0 +1,66 @@
+name: Build MIPSel Linux single executable
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-mipsel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cross toolchain and utilities
+        run: |
+          sudo apt-get update -y
+          # Install common cross-compile toolchain packages (may take a while)
+          sudo apt-get install -y gcc-mipsel-linux-gnu g++-mipsel-linux-gnu binutils-mipsel-linux-gnu libc6-dev-mipsel-cross make zip file
+
+      - name: List repo files (debug)
+        run: ls -la
+
+      - name: Cross-compile for mipsel (try static, fallback to dynamic)
+        env:
+          CC: mipsel-linux-gnu-gcc
+          CFLAGS: "-O2 -DWITH_NONAMESPACES -DSOAP_DEBUG -DDEBUG -I."
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          echo "Compiler: $CC"
+          echo "Attempt static build (preferred for a single-file binary)..."
+          # Source list: explicitly list files present in repo; include config.c if added
+          SRC="soapC.c stdsoap2.c duration.c wsaapi.c soapClient.c soapServer.c onvif_server_interface.c onvif_server.c config.c"
+          $CC $CFLAGS $SRC -o build/deviceserver.mipsel -static -static-libgcc -static-libstdc++ -lpthread -lm || {
+            echo "Static build failed; retrying without -static..."
+            $CC $CFLAGS $SRC -o build/deviceserver.mipsel -lpthread -lm
+            if [ $? -ne 0 ]; then
+              echo "Non-static build also failed. Exiting with error."
+              exit 1
+            fi
+          }
+          file build/deviceserver.mipsel || true
+          ls -lh build/deviceserver.mipsel
+
+      - name: Strip binary (best-effort)
+        run: |
+          if command -v mipsel-linux-gnu-strip >/dev/null 2>&1; then
+            mipsel-linux-gnu-strip build/deviceserver.mipsel || true
+          fi
+          ls -lh build/deviceserver.mipsel || true
+
+      - name: Package artifact
+        run: |
+          mkdir -p out
+          cp build/deviceserver.mipsel out/ || true
+          zip -j out/deviceserver-mipsel.zip out/deviceserver.mipsel || true
+          ls -l out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deviceserver-mipsel
+          path: out/
