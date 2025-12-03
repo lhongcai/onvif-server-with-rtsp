@@ -1,0 +1,68 @@
+name: Build Windows single EXE (cross-compile)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies (mingw-w64, zip)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y mingw-w64 build-essential zip file
+
+      - name: Show repo files (debug)
+        run: ls -la
+
+      - name: Cross-compile single Windows EXE (x86_64)
+        env:
+          CC: x86_64-w64-mingw32-gcc
+          CFLAGS: "-O2 -DWITH_NONAMESPACES -DSOAP_DEBUG -DDEBUG -I."
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          echo "Using compiler: $CC"
+          echo "Compiling sources..."
+          # Explicit source list to avoid accidental inclusion of unrelated C files
+          $CC $CFLAGS \
+            soapC.c stdsoap2.c duration.c wsaapi.c \
+            soapClient.c soapServer.c onvif_server_interface.c onvif_server.c config.c \
+            -o build/deviceserver.exe \
+            -static -static-libgcc -static-libstdc++ \
+            -lws2_32 -lwinpthread -liphlpapi -lwsock32 -lm || \
+            (echo "Cross-compile failed; retry without -static..."; \
+              $CC $CFLAGS \
+              soapC.c stdsoap2.c duration.c wsaapi.c \
+              soapClient.c soapServer.c onvif_server_interface.c onvif_server.c config.c \
+              -o build/deviceserver.exe \
+              -static-libgcc -static-libstdc++ \
+              -lws2_32 -lwinpthread -liphlpapi -lwsock32 -lm)
+          file build/deviceserver.exe || true
+          ls -l build
+
+      - name: Strip exe to reduce size (best-effort)
+        run: |
+          set -e
+          which x86_64-w64-mingw32-strip >/dev/null 2>&1 && x86_64-w64-mingw32-strip build/deviceserver.exe || true
+          ls -lh build/deviceserver.exe || true
+
+      - name: Package artifact
+        run: |
+          mkdir -p out
+          cp build/deviceserver.exe out/ || true
+          zip -j out/deviceserver-windows.zip out/deviceserver.exe || true
+          ls -l out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deviceserver-windows
+          path: out/
